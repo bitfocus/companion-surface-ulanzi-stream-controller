@@ -1,5 +1,5 @@
 import type { SurfacePincodeMap, SurfaceSchemaLayoutDefinition } from '@companion-surface/base'
-import { ICON_HEIGHT, ICON_WIDTH } from './protocol.js'
+import { ICON_HEIGHT, ICON_WIDTH, SMALL_WINDOW_BG_HEIGHT, SMALL_WINDOW_BG_WIDTH } from './protocol.js'
 
 /**
  * The D200X has 14 physical LCD buttons in a 5×3 grid (including the small-window
@@ -97,21 +97,25 @@ export const PINCODE_MAP: SurfacePincodeMap = {
 	0: '3_1',
 }
 
-export function createSurfaceSchema(): SurfaceSchemaLayoutDefinition {
+export function createSurfaceSchema(smallWindowEnabled: boolean): SurfaceSchemaLayoutDefinition {
 	const layout: SurfaceSchemaLayoutDefinition = {
 		stylePresets: {
 			default: {},
 			button: {
 				bitmap: { w: ICON_WIDTH, h: ICON_HEIGHT, format: 'rgb' },
 			},
+			wide: {
+				bitmap: { w: SMALL_WINDOW_BG_WIDTH, h: SMALL_WINDOW_BG_HEIGHT, format: 'rgb' },
+			},
 		},
 		controls: {},
 	}
 	for (const { col, row } of LCD_BUTTON_POSITIONS) {
+		const isSmallWindowSlot = col === 3 && row === 2
 		layout.controls[`${col}_${row}`] = {
 			row,
 			column: col,
-			stylePreset: 'button',
+			stylePreset: isSmallWindowSlot && !smallWindowEnabled ? 'wide' : 'button',
 		}
 	}
 	for (const entry of INPUT_CONTROLS) {

@@ -13,7 +13,10 @@ import { D200Device } from './device.js'
 import {
 	ICON_HEIGHT,
 	ICON_WIDTH,
+	SMALL_WINDOW_BG_HEIGHT,
+	SMALL_WINDOW_BG_WIDTH,
 } from './protocol.js'
+import { SMALL_WINDOW_DISABLED } from './config.js'
 import { type ButtonRenderInput } from './zip-builder.js'
 import { LCD_BUTTON_POSITIONS, controlIdFromIndex, positionFromControlId } from './surface-schema.js'
 
@@ -28,6 +31,7 @@ export class D200Surface implements SurfaceInstance {
 	#flushTimer?: NodeJS.Timeout
 	#initialPushDone = false
 	#statusActive = false
+	#smallWindowMode: number = SMALL_WINDOW_DISABLED
 
 	public get surfaceId(): string {
 		return this.#surfaceId
@@ -88,8 +92,17 @@ export class D200Surface implements SurfaceInstance {
 		// not used
 	}
 
-	async updateConfig(_config: Record<string, any>): Promise<void> {
-		// No config fields currently
+	async updateConfig(config: Record<string, any>): Promise<void> {
+		const mode = Number(config.smallWindowMode ?? SMALL_WINDOW_DISABLED)
+		this.#smallWindowMode = mode
+
+		if (mode === SMALL_WINDOW_DISABLED) {
+			this.#device.pauseKeepAlive()
+		} else {
+			this.#device.setSmallWindowMode(mode)
+			this.#device.setTwelveHour(!!config.twelveHour)
+			this.#device.resumeKeepAlive()
+		}
 	}
 
 	async ready(): Promise<void> {}
@@ -116,10 +129,14 @@ export class D200Surface implements SurfaceInstance {
 			return
 		}
 
+		const isSmallWindowSlot = pos.col === 3 && pos.row === 2
+		const iconW = isSmallWindowSlot ? SMALL_WINDOW_BG_WIDTH : ICON_WIDTH
+		const iconH = isSmallWindowSlot ? SMALL_WINDOW_BG_HEIGHT : ICON_HEIGHT
+
 		const png = await imageRs.ImageTransformer.fromBuffer(
 			drawProps.image,
-			ICON_WIDTH,
-			ICON_HEIGHT,
+			iconW,
+			iconH,
 			'rgb',
 		).toEncodedImage('png')
 		if (signal.aborted) return
@@ -137,13 +154,13 @@ export class D200Surface implements SurfaceInstance {
 
 		this.#device.pauseKeepAlive()
 
-		const buttonPixels = await cards.generateLogoCard(ICON_WIDTH, ICON_HEIGHT, 'rgb')
+		const buttonPixels = await cards.generateLogoCard(SMALL_WINDOW_BG_WIDTH, SMALL_WINDOW_BG_HEIGHT, 'rgb')
 		if (signal.aborted) return
 
 		const buttonPng = await imageRs.ImageTransformer.fromBuffer(
 			Buffer.from(buttonPixels),
-			ICON_WIDTH,
-			ICON_HEIGHT,
+			SMALL_WINDOW_BG_WIDTH,
+			SMALL_WINDOW_BG_HEIGHT,
 			'rgb',
 		).toEncodedImage('png')
 		if (signal.aborted) return
@@ -155,7 +172,10 @@ export class D200Surface implements SurfaceInstance {
 		}))
 
 		try {
-			await this.#device.setButtons(batch, { partial: false })
+			await this.#device.setButtons(batch, {
+				partial: false,
+				smallWindowMode: this.#smallWindowMode,
+			})
 			this.#statusActive = true
 		} catch (e) {
 			this.#logger.warn(`showStatus setButtons failed: ${(e as Error).message}`)
@@ -172,14 +192,12 @@ export class D200Surface implements SurfaceInstance {
 
 	async #flush(partial: boolean): Promise<void> {
 		if (this.#pending.size === 0) return
-		// Returning from a status display: force a full SET_BUTTONS so all 13
-		// slots are repainted (clearing the logo card) and the small-window slot
-		// is rewritten with the configured background / clock mode. Pad missing
-		// slots with blanks so the firmware doesn't drop them from the manifest.
 		let isPartial = partial && this.#initialPushDone
 		if (this.#statusActive) {
 			this.#statusActive = false
-			this.#device.resumeKeepAlive()
+			if (this.#smallWindowMode !== SMALL_WINDOW_DISABLED) {
+				this.#device.resumeKeepAlive()
+			}
 			isPartial = false
 			for (const pos of LCD_BUTTON_POSITIONS) {
 				const key = `${pos.col}_${pos.row}`
@@ -191,6 +209,7 @@ export class D200Surface implements SurfaceInstance {
 		try {
 			await this.#device.setButtons(batch, {
 				partial: isPartial,
+				smallWindowMode: this.#smallWindowMode,
 			})
 		} catch (e) {
 			this.#logger.warn(`setButtons failed: ${(e as Error).message}`)

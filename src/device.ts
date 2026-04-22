@@ -136,13 +136,11 @@ export class D200Device extends EventEmitter<D200Events> {
 
 	async setButtons(
 		buttons: ButtonRenderInput[],
-		opts: { partial?: boolean; backgroundPng?: Buffer } = {},
+		opts: { partial?: boolean; backgroundPng?: Buffer; smallWindowMode?: number } = {},
 	): Promise<void> {
 		const zipPayload = await buildButtonZip(buttons, {
 			backgroundPng: opts.backgroundPng,
-			// Partial updates must omit the small-window slot so we don't re-upload its
-			// (potentially large) background PNG on every button change.
-			includeSmallWindowSlot: !opts.partial,
+			smallWindowMode: opts.smallWindowMode ?? -1,
 		})
 		const command = opts.partial ? Command.OUT_PARTIALLY_UPDATE_BUTTONS : Command.OUT_SET_BUTTONS
 		const packets = buildChunkedPackets(command, zipPayload)

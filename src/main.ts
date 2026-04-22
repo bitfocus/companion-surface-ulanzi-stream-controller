@@ -53,7 +53,7 @@ const D200Plugin: SurfacePlugin<D200PluginInfo> = {
 			surface: new D200Surface(surfaceId, device, context),
 			registerProps: {
 				brightness: true,
-				surfaceLayout: createSurfaceSchema(),
+				surfaceLayout: createSurfaceSchema(false),
 				pincodeMap: PINCODE_MAP,
 				configFields: CONFIG_FIELDS,
 				location: null,

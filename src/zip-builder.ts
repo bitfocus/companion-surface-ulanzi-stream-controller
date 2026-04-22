@@ -1,6 +1,6 @@
 import JSZip from 'jszip'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { FIRST_CHUNK_DATA, PACKET_SIZE, isPayloadSafe } from './protocol.js'
+import { FIRST_CHUNK_DATA, PACKET_SIZE, SmallWindowMode, isPayloadSafe } from './protocol.js'
 
 export interface ButtonRenderInput {
 	col: number
@@ -40,18 +40,23 @@ const DEFAULT_FONT: FontStyle = {
 	Weight: 80,
 }
 
-/** Slot occupied by the small-window status display. */
+/** Slot occupied by the small-window status display (2 cells wide). */
 export const SMALL_WINDOW_SLOT = { col: 3, row: 2 }
 
 export interface BuildButtonZipOptions {
-	/** PNG for the 458×196 small-window background. When present, `3_2` is built with SmallViewMode:2 + Icon. */
+	/**
+	 * PNG for the 458×196 small-window background image.
+	 * Only used when smallWindowMode is SmallWindowMode.BACKGROUND (2).
+	 */
 	backgroundPng?: Buffer
 	/**
-	 * Whether to emit the `3_2` slot as a small-window entry (SmallViewMode)
-	 * instead of treating it as a regular button.
-	 * Defaults to false — the slot is rendered as a normal button with an icon.
+	 * SmallWindowMode for the 3_2 slot in the manifest.
+	 * -1 = disabled (button-only, uses SmallViewMode:2 with the button icon
+	 *     as background so the firmware allocates the full 458px width).
+	 * 0–203 = clock/stats mode (the matching SmallViewMode is set in the manifest
+	 *     and the keep-alive will push live data).
 	 */
-	includeSmallWindowSlot?: boolean
+	smallWindowMode: number
 }
 
 /**
@@ -67,7 +72,7 @@ export interface BuildButtonZipOptions {
  */
 export async function buildButtonZip(
 	buttons: ButtonRenderInput[],
-	options: BuildButtonZipOptions = {},
+	options: BuildButtonZipOptions = { smallWindowMode: -1 },
 ): Promise<Buffer> {
 	const manifest: Record<string, ManifestEntry> = {}
 	const icons = new Map<string, Buffer>()
@@ -84,23 +89,45 @@ export async function buildButtonZip(
 		manifest[key] = { State: 0, ViewParam: [viewParam] }
 	}
 
-	// When includeSmallWindowSlot is true, override the 3_2 entry with a
-	// SmallViewMode manifest instead of treating it as a regular button icon.
-	// This is only used when the user explicitly wants the clock/stats display.
-	if (options.includeSmallWindowSlot) {
-		const smallKey = `${SMALL_WINDOW_SLOT.col}_${SMALL_WINDOW_SLOT.row}`
-		if (options.backgroundPng) {
+	// The 3_2 slot spans 2 cells (458×196). The firmware only allocates the
+	// full width when SmallViewMode is present in the manifest. We always
+	// set it so that every button gets correct dimensions.
+	const smallKey = `${SMALL_WINDOW_SLOT.col}_${SMALL_WINDOW_SLOT.row}`
+	const smallEntry = manifest[smallKey]
+
+	if (options.smallWindowMode === -1) {
+		// "Disabled" mode: use SmallViewMode:2 (background image) so the
+		// firmware allocates the full 458px width, but display only the
+		// Companion-rendered button icon with no clock overlay.
+		if (smallEntry) {
+			smallEntry.SmallViewMode = SmallWindowMode.BACKGROUND
+			if (smallEntry.ViewParam[0]) smallEntry.ViewParam[0].Text = ''
+		} else {
+			manifest[smallKey] = {
+				State: 0,
+				SmallViewMode: SmallWindowMode.BACKGROUND,
+				ViewParam: [{ Font: DEFAULT_FONT, Text: '' }],
+			}
+		}
+	} else {
+		// Clock/stats mode: set the appropriate SmallViewMode.
+		// Mode 2 (background) can carry a custom background image.
+		if (options.smallWindowMode === SmallWindowMode.BACKGROUND && options.backgroundPng) {
+			// Replace the 3_2 entry with a background image entry.
 			const iconId = randomUUID()
 			icons.set(iconId, options.backgroundPng)
 			manifest[smallKey] = {
 				State: 0,
-				SmallViewMode: 2,
+				SmallViewMode: SmallWindowMode.BACKGROUND,
 				ViewParam: [{ Font: DEFAULT_FONT, Icon: `Images/${iconId}.png`, Text: '' }],
 			}
+		} else if (smallEntry) {
+			smallEntry.SmallViewMode = options.smallWindowMode
+			if (smallEntry.ViewParam[0]) smallEntry.ViewParam[0].Text = ''
 		} else {
 			manifest[smallKey] = {
 				State: 0,
-				SmallViewMode: 1,
+				SmallViewMode: options.smallWindowMode,
 				ViewParam: [{ Font: DEFAULT_FONT, Text: '' }],
 			}
 		}
