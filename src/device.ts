@@ -63,9 +63,11 @@ export class D200Device extends EventEmitter<D200Events> {
 			}
 		})
 
-		this.#keepAlive = setInterval(() => {
-			this.setSmallWindow(this.#buildSmallWindowData()).catch(() => null)
-		}, 5000)
+		// Keep-alive for small window clock is not started by default.
+		// On the D200X, the 3_2 slot is a regular button, so clock data
+		// would render on top of the button icon. On the D200, callers can
+		// start it explicitly via startKeepAlive().
+		this.#keepAlive = undefined
 	}
 
 	async close(): Promise<void> {
