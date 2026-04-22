@@ -1,23 +1,22 @@
 import type { SurfacePincodeMap, SurfaceSchemaLayoutDefinition } from '@companion-surface/base'
 import { ICON_HEIGHT, ICON_WIDTH } from './protocol.js'
-import { SMALL_WINDOW_SLOT } from './zip-builder.js'
 
 /**
- * The D200/D200X has 13 physical LCD buttons in a non-uniform 5×3 grid:
+ * The D200X has 14 physical LCD buttons in a 5×3 grid (including the small-window
+ * touch area) plus 2 page buttons and 3 rotary encoders:
  *
  *   row 0: col 0  col 1  col 2  col 3  col 4
  *   row 1: col 0  col 1  col 2  col 3  col 4
- *   row 2: col 0  col 1  col 2  [small window]  -
+ *   row 2: col 0  col 1  col 2  col 3  (small-window touch, 2 cells wide)
+ *   row 3: [pg_L] enc1   enc2   enc3  [pg_R]
  *
- * The slot at (col 3, row 2) is the small-window status display (not a
- * button), and (col 4, row 2) does not exist.
- *
- * The device emits row-major button indices 0..12 (idx = row*5 + col).
+ * The device emits indices 0–12 for the standard grid buttons, 13 for the
+ * small-window touch area, 15/16 for page buttons, and 17–19 for encoders.
  */
 export const LCD_BUTTON_POSITIONS: ReadonlyArray<{ col: number; row: number }> = [
 	{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }, { col: 3, row: 0 }, { col: 4, row: 0 },
 	{ col: 0, row: 1 }, { col: 1, row: 1 }, { col: 2, row: 1 }, { col: 3, row: 1 }, { col: 4, row: 1 },
-	{ col: 0, row: 2 }, { col: 1, row: 2 }, { col: 2, row: 2 },
+	{ col: 0, row: 2 }, { col: 1, row: 2 }, { col: 2, row: 2 }, { col: 3, row: 2 },
 ]
 
 export type InputControlType = 'button' | 'encoder' | 'page'
@@ -33,7 +32,7 @@ interface InputControlDef {
  * Complete input map for the D200X. Maps device input indices to control IDs.
  *
  * Indices 0–12: LCD grid buttons (same as D200)
- * Index 13: unknown (state=200 observed, possibly a special/system button)
+ * Index 13: small-window touch area (D200X only)
  * Index 14: unused
  * Index 15: left page button
  * Index 16: right page button
@@ -55,7 +54,7 @@ const INPUT_CONTROLS: ReadonlyArray<InputControlDef | null> = [
 	{ controlId: '0_2', type: 'button', col: 0, row: 2 },
 	{ controlId: '1_2', type: 'button', col: 1, row: 2 },
 	{ controlId: '2_2', type: 'button', col: 2, row: 2 },
-	null,
+	{ controlId: '3_2', type: 'button', col: 3, row: 2 },
 	null,
 	{ controlId: 'page_left',  type: 'page',    col: 0, row: 3 },
 	{ controlId: 'page_right', type: 'page',    col: 4, row: 3 },
@@ -84,6 +83,11 @@ export function positionFromControlId(controlId: string): { col: number; row: nu
 	return { col: entry.col, row: entry.row }
 }
 
+/**
+ * Numpad-style pincode entry: 7/8/9 on the top row, 4/5/6 middle,
+ * 1/2/3 bottom, 0 next to 6. The small-window button (3_2) is available
+ * as a general-purpose control but not assigned a pincode digit.
+ */
 export const PINCODE_MAP: SurfacePincodeMap = {
 	type: 'single-page',
 	pincode: null,
@@ -117,6 +121,5 @@ export function createSurfaceSchema(): SurfaceSchemaLayoutDefinition {
 			column: entry.col,
 		}
 	}
-	void SMALL_WINDOW_SLOT
 	return layout
 }

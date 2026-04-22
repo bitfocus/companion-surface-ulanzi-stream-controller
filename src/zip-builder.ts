@@ -47,10 +47,9 @@ export interface BuildButtonZipOptions {
 	/** PNG for the 458×196 small-window background. When present, `3_2` is built with SmallViewMode:2 + Icon. */
 	backgroundPng?: Buffer
 	/**
-	 * Whether to emit the `3_2` small-window slot in the manifest.
-	 * Full SET_BUTTONS updates should include it (firmware may reject the upload otherwise).
-	 * PARTIAL_UPDATE should omit it so we don't re-upload a large background PNG on every
-	 * button change — the slot persists from the last full upload.
+	 * Whether to emit the `3_2` slot as a small-window entry (SmallViewMode)
+	 * instead of treating it as a regular button.
+	 * Defaults to false — the slot is rendered as a normal button with an icon.
 	 */
 	includeSmallWindowSlot?: boolean
 }
@@ -85,13 +84,10 @@ export async function buildButtonZip(
 		manifest[key] = { State: 0, ViewParam: [viewParam] }
 	}
 
-	// The small-window slot must be declared on every full SET_BUTTONS upload,
-	// otherwise the firmware may refuse the whole update. When the user has set a
-	// background image, this slot carries SmallViewMode:2 and an Icon; otherwise
-	// SmallViewMode:1 (dial clock placeholder, also used for stats / digital).
-	// Partial updates omit this slot so we don't re-upload the background on every
-	// button change — the slot persists from the last full upload.
-	if (options.includeSmallWindowSlot ?? true) {
+	// When includeSmallWindowSlot is true, override the 3_2 entry with a
+	// SmallViewMode manifest instead of treating it as a regular button icon.
+	// This is only used when the user explicitly wants the clock/stats display.
+	if (options.includeSmallWindowSlot) {
 		const smallKey = `${SMALL_WINDOW_SLOT.col}_${SMALL_WINDOW_SLOT.row}`
 		if (options.backgroundPng) {
 			const iconId = randomUUID()
