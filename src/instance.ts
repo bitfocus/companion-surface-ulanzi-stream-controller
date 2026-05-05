@@ -8,18 +8,23 @@ import {
 	type ModuleLogger,
 } from '@companion-surface/base'
 import * as imageRs from '@julusian/image-rs'
-import { readFile } from 'node:fs/promises'
 import type { HIDAsync } from 'node-hid'
-import { parseSmallWindowMode } from './config.js'
 import { D200Device } from './device.js'
 import {
 	ICON_HEIGHT,
 	ICON_WIDTH,
 	SMALL_WINDOW_BG_HEIGHT,
 	SMALL_WINDOW_BG_WIDTH,
+	SmallWindowMode,
 } from './protocol.js'
+import { SMALL_WINDOW_DISABLED } from './config.js'
 import { type ButtonRenderInput } from './zip-builder.js'
-import { BUTTON_POSITIONS, controlIdFromIndex, positionFromControlId } from './surface-schema.js'
+import {
+	LCD_BUTTON_POSITIONS,
+	controlIdFromIndex,
+	positionFromControlId,
+	virtualTurnControlId,
+} from './surface-schema.js'
 
 export class D200Surface implements SurfaceInstance {
 	readonly #logger: ModuleLogger
@@ -29,11 +34,17 @@ export class D200Surface implements SurfaceInstance {
 
 	/** Keyed by controlId (`col_row`). */
 	readonly #pending = new Map<string, ButtonRenderInput>()
+	readonly #renderCache = new Map<string, ButtonRenderInput>()
 	#flushTimer?: NodeJS.Timeout
+	#screensaverTimer?: NodeJS.Timeout
 	#initialPushDone = false
 	#statusActive = false
-	#backgroundPath = ''
-	#backgroundPng?: Buffer
+	#screensaverEnabled = false
+	#screensaverMinutes = 5
+	#screensaverActive = false
+	#screensaverWaking = false
+	#smallWindowMode: number = SMALL_WINDOW_DISABLED
+	#pageButtonsNavigate = true
 
 	public get surfaceId(): string {
 		return this.#surfaceId
@@ -52,11 +63,8 @@ export class D200Surface implements SurfaceInstance {
 			this.#logger.error(`D200 error: ${e.message}`)
 			context.disconnect(e)
 		})
-		this.#device.on('button', ({ index, pressed }) => {
-			const controlId = controlIdFromIndex(index)
-			if (!controlId) return
-			if (pressed) this.#context.keyDownById(controlId)
-			else this.#context.keyUpById(controlId)
+		this.#device.on('input', (event) => {
+			void this.#handleInputEvent(event)
 		})
 		this.#device.on('deviceInfo', (info) => {
 			this.#logger.info(`Device info: ${info}`)
@@ -64,17 +72,73 @@ export class D200Surface implements SurfaceInstance {
 		this.#device.on('log', (line) => this.#logger.info(line))
 	}
 
+	#pulseVirtualControl(controlId: string, direction: 'left' | 'right'): void {
+		const virtualId = virtualTurnControlId(controlId, direction)
+		if (!virtualId) return
+		this.#context.keyDownById(virtualId)
+		this.#context.keyUpById(virtualId)
+	}
+
+	async #handleInputEvent(event: { index: number; type: 'button' | 'encoder'; action: 'press' | 'release' | 'left' | 'right' }): Promise<void> {
+		const controlId = controlIdFromIndex(event.index)
+		if (!controlId) return
+
+		if (this.#screensaverActive) {
+			if (this.#screensaverWaking) return
+			await this.#wakeFromScreensaver()
+			this.#resetScreensaverTimer()
+			return
+		}
+
+		this.#recordActivity()
+
+		if (event.type === 'encoder') {
+			if (event.action === 'left') {
+				this.#context.rotateLeftById(controlId)
+				this.#pulseVirtualControl(controlId, 'left')
+			}
+			else if (event.action === 'right') {
+				this.#context.rotateRightById(controlId)
+				this.#pulseVirtualControl(controlId, 'right')
+			}
+			else if (event.action === 'press') this.#context.keyDownById(controlId)
+			else if (event.action === 'release') this.#context.keyUpById(controlId)
+		} else if (controlId === 'page_left') {
+			if (this.#pageButtonsNavigate) {
+				if (event.action === 'press') this.#context.changePage(false)
+			} else {
+				if (event.action === 'press') this.#context.keyDownById(controlId)
+				else if (event.action === 'release') this.#context.keyUpById(controlId)
+			}
+		} else if (controlId === 'page_right') {
+			if (this.#pageButtonsNavigate) {
+				if (event.action === 'press') this.#context.changePage(true)
+			} else {
+				if (event.action === 'press') this.#context.keyDownById(controlId)
+				else if (event.action === 'release') this.#context.keyUpById(controlId)
+			}
+		} else {
+			if (event.action === 'press') this.#context.keyDownById(controlId)
+			else if (event.action === 'release') this.#context.keyUpById(controlId)
+		}
+	}
+
 	async init(): Promise<void> {
-		for (const pos of BUTTON_POSITIONS) {
+		for (const pos of LCD_BUTTON_POSITIONS) {
 			const key = `${pos.col}_${pos.row}`
-			this.#pending.set(key, { col: pos.col, row: pos.row })
+			const blank = { col: pos.col, row: pos.row }
+			this.#pending.set(key, blank)
+			this.#renderCache.set(key, blank)
 		}
 		await this.#flush(false)
 		this.#initialPushDone = true
+		this.#applySmallWindowConfig()
+		this.#resetScreensaverTimer()
 	}
 
 	async close(): Promise<void> {
 		if (this.#flushTimer) clearTimeout(this.#flushTimer)
+		if (this.#screensaverTimer) clearTimeout(this.#screensaverTimer)
 		await this.#device.close()
 	}
 
@@ -83,35 +147,17 @@ export class D200Surface implements SurfaceInstance {
 	}
 
 	async updateConfig(config: Record<string, any>): Promise<void> {
-		if (typeof config.backgroundImagePath === 'string' && config.backgroundImagePath !== this.#backgroundPath) {
-			this.#backgroundPath = config.backgroundImagePath
-			await this.#loadBackground(this.#backgroundPath)
-			if (this.#initialPushDone) await this.#flush(false)
+		const mode = Number(config.smallWindowMode ?? SMALL_WINDOW_DISABLED)
+		this.#smallWindowMode = mode
+		this.#pageButtonsNavigate = config.pageButtonsNavigate !== false
+		this.#screensaverEnabled = config.screensaverEnabled === true
+		this.#screensaverMinutes = Number(config.screensaverMinutes || 5)
+		this.#device.setTwelveHour(!!config.twelveHour)
+		this.#applySmallWindowConfig()
+		if (this.#screensaverActive && !this.#screensaverEnabled) {
+			await this.#wakeFromScreensaver()
 		}
-		if (config.twelveHour !== undefined) {
-			this.#device.setTwelveHour(Boolean(config.twelveHour))
-		}
-		if (config.smallWindowMode !== undefined) {
-			this.#device.setSmallWindowMode(parseSmallWindowMode(config.smallWindowMode))
-		}
-	}
-
-	async #loadBackground(path: string): Promise<void> {
-		if (!path) {
-			this.#backgroundPng = undefined
-			return
-		}
-		try {
-			const raw = await readFile(path)
-			const encoded = await imageRs.ImageTransformer.fromEncodedImage(raw)
-				.scale(SMALL_WINDOW_BG_WIDTH, SMALL_WINDOW_BG_HEIGHT, 'Fill')
-				.cropCenter(SMALL_WINDOW_BG_WIDTH, SMALL_WINDOW_BG_HEIGHT)
-				.toEncodedImage('png')
-			this.#backgroundPng = Buffer.from(encoded.buffer)
-		} catch (e) {
-			this.#logger.warn(`Failed to load background image "${path}": ${(e as Error).message}`)
-			this.#backgroundPng = undefined
-		}
+		this.#resetScreensaverTimer()
 	}
 
 	async ready(): Promise<void> {}
@@ -121,7 +167,7 @@ export class D200Surface implements SurfaceInstance {
 	}
 
 	async blank(): Promise<void> {
-		for (const pos of BUTTON_POSITIONS) {
+		for (const pos of LCD_BUTTON_POSITIONS) {
 			this.#pending.set(`${pos.col}_${pos.row}`, { col: pos.col, row: pos.row })
 		}
 		await this.#flush(false)
@@ -131,17 +177,24 @@ export class D200Surface implements SurfaceInstance {
 		const pos = positionFromControlId(drawProps.controlId)
 		if (!pos) return
 		const key = `${pos.col}_${pos.row}`
+		const isSmallWindowSlot = pos.col === 3 && pos.row === 2
 
 		if (!drawProps.image) {
-			this.#pending.set(key, { col: pos.col, row: pos.row })
+			const blank = { col: pos.col, row: pos.row }
+			this.#pending.set(key, blank)
+			this.#renderCache.set(key, blank)
+			if (this.#screensaverActive) return
 			this.#scheduleFlush()
 			return
 		}
 
+		const iconW = isSmallWindowSlot ? SMALL_WINDOW_BG_WIDTH : ICON_WIDTH
+		const iconH = isSmallWindowSlot ? SMALL_WINDOW_BG_HEIGHT : ICON_HEIGHT
+
 		const png = await imageRs.ImageTransformer.fromBuffer(
 			drawProps.image,
-			ICON_WIDTH,
-			ICON_HEIGHT,
+			iconW,
+			iconH,
 			'rgb',
 		).toEncodedImage('png')
 		if (signal.aborted) return
@@ -151,45 +204,42 @@ export class D200Surface implements SurfaceInstance {
 			row: pos.row,
 			iconPng: Buffer.from(png.buffer),
 		})
+		this.#renderCache.set(key, {
+			col: pos.col,
+			row: pos.row,
+			iconPng: Buffer.from(png.buffer),
+		})
+		if (this.#screensaverActive) return
 		this.#scheduleFlush()
 	}
 
 	async showStatus(signal: AbortSignal, cards: CardGenerator, _statusMessage?: string): Promise<void> {
 		if (signal.aborted) return
 
-		// Keep-alive would overwrite the small-window background on its next tick;
-		// pause it for the duration of the status display. draw() / blank() resume it.
-		this.#device.pauseKeepAlive()
+		this.#pauseSmallWindowUpdates()
 
-		const [buttonPixels, stripPixels] = await Promise.all([
-			cards.generateLogoCard(ICON_WIDTH, ICON_HEIGHT, 'rgb'),
-			cards.generateLcdStripCard(SMALL_WINDOW_BG_WIDTH, SMALL_WINDOW_BG_HEIGHT, 'rgb'),
-		])
+		const buttonPixels = await cards.generateLogoCard(SMALL_WINDOW_BG_WIDTH, SMALL_WINDOW_BG_HEIGHT, 'rgb')
 		if (signal.aborted) return
 
-		const [buttonPng, stripPng] = await Promise.all([
-			imageRs.ImageTransformer.fromBuffer(Buffer.from(buttonPixels), ICON_WIDTH, ICON_HEIGHT, 'rgb')
-				.toEncodedImage('png')
-				.then((e) => Buffer.from(e.buffer)),
-			imageRs.ImageTransformer.fromBuffer(
-				Buffer.from(stripPixels),
-				SMALL_WINDOW_BG_WIDTH,
-				SMALL_WINDOW_BG_HEIGHT,
-				'rgb',
-			)
-				.toEncodedImage('png')
-				.then((e) => Buffer.from(e.buffer)),
-		])
+		const buttonPng = await imageRs.ImageTransformer.fromBuffer(
+			Buffer.from(buttonPixels),
+			SMALL_WINDOW_BG_WIDTH,
+			SMALL_WINDOW_BG_HEIGHT,
+			'rgb',
+		).toEncodedImage('png')
 		if (signal.aborted) return
 
-		const batch: ButtonRenderInput[] = BUTTON_POSITIONS.map((pos) => ({
+		const batch: ButtonRenderInput[] = LCD_BUTTON_POSITIONS.map((pos) => ({
 			col: pos.col,
 			row: pos.row,
-			iconPng: buttonPng,
+			iconPng: Buffer.from(buttonPng.buffer),
 		}))
 
 		try {
-			await this.#device.setButtons(batch, { partial: false, backgroundPng: stripPng })
+			await this.#device.setButtons(batch, {
+				partial: false,
+				smallWindowMode: this.#smallWindowMode,
+			})
 			this.#statusActive = true
 		} catch (e) {
 			this.#logger.warn(`showStatus setButtons failed: ${(e as Error).message}`)
@@ -205,17 +255,14 @@ export class D200Surface implements SurfaceInstance {
 	}
 
 	async #flush(partial: boolean): Promise<void> {
+		if (this.#screensaverActive) return
 		if (this.#pending.size === 0) return
-		// Returning from a status display: force a full SET_BUTTONS so all 13
-		// slots are repainted (clearing the logo card) and the small-window slot
-		// is rewritten with the configured background / clock mode. Pad missing
-		// slots with blanks so the firmware doesn't drop them from the manifest.
 		let isPartial = partial && this.#initialPushDone
 		if (this.#statusActive) {
 			this.#statusActive = false
-			this.#device.resumeKeepAlive()
+			this.#resumeSmallWindowUpdates()
 			isPartial = false
-			for (const pos of BUTTON_POSITIONS) {
+			for (const pos of LCD_BUTTON_POSITIONS) {
 				const key = `${pos.col}_${pos.row}`
 				if (!this.#pending.has(key)) this.#pending.set(key, { col: pos.col, row: pos.row })
 			}
@@ -225,10 +272,99 @@ export class D200Surface implements SurfaceInstance {
 		try {
 			await this.#device.setButtons(batch, {
 				partial: isPartial,
-				backgroundPng: this.#backgroundPng,
+				smallWindowMode: this.#smallWindowMode,
 			})
 		} catch (e) {
 			this.#logger.warn(`setButtons failed: ${(e as Error).message}`)
+		}
+	}
+
+	#recordActivity(): void {
+		if (this.#screensaverActive) {
+			void this.#wakeFromScreensaver()
+		}
+		this.#resetScreensaverTimer()
+	}
+
+	#resetScreensaverTimer(): void {
+		if (this.#screensaverTimer) {
+			clearTimeout(this.#screensaverTimer)
+			this.#screensaverTimer = undefined
+		}
+		if (!this.#screensaverEnabled || this.#screensaverMinutes <= 0) return
+		this.#screensaverTimer = setTimeout(() => {
+			void this.#activateScreensaver()
+		}, this.#screensaverMinutes * 60 * 1000)
+	}
+
+	async #activateScreensaver(): Promise<void> {
+		if (this.#screensaverActive) return
+		this.#screensaverActive = true
+		this.#pauseSmallWindowUpdates()
+		try {
+			await this.#device.lockScreen()
+		} catch (e) {
+			this.#logger.warn(`screensaver lock failed: ${(e as Error).message}`)
+		}
+	}
+
+	async #wakeFromScreensaver(): Promise<void> {
+		if (!this.#screensaverActive) return
+		if (this.#screensaverWaking) return
+		this.#screensaverWaking = true
+		try {
+			await this.#device.unlockScreen()
+		} catch (e) {
+			this.#logger.warn(`screensaver unlock failed: ${(e as Error).message}`)
+			this.#screensaverWaking = false
+			return
+		}
+		this.#screensaverActive = false
+		if (this.#flushTimer) {
+			clearTimeout(this.#flushTimer)
+			this.#flushTimer = undefined
+		}
+		this.#restoreCachedButtonsToPending()
+		this.#resumeSmallWindowUpdates()
+		await this.#flushNow(false)
+		this.#resetScreensaverTimer()
+		this.#screensaverWaking = false
+	}
+
+	#restoreCachedButtonsToPending(): void {
+		for (const pos of LCD_BUTTON_POSITIONS) {
+			const key = `${pos.col}_${pos.row}`
+			this.#pending.set(key, this.#renderCache.get(key) ?? { col: pos.col, row: pos.row })
+		}
+	}
+
+	async #flushNow(partial: boolean): Promise<void> {
+		const wasActive = this.#screensaverActive
+		this.#screensaverActive = false
+		try {
+			await this.#flush(partial)
+		} finally {
+			this.#screensaverActive = wasActive
+		}
+	}
+
+	#applySmallWindowConfig(): void {
+		if (this.#smallWindowMode === SMALL_WINDOW_DISABLED) {
+			this.#device.setSmallWindowMode(SmallWindowMode.BACKGROUND)
+			this.#device.pauseKeepAlive()
+		} else {
+			this.#device.setSmallWindowMode(this.#smallWindowMode)
+			this.#device.resumeKeepAlive()
+		}
+	}
+
+	#pauseSmallWindowUpdates(): void {
+		this.#device.pauseKeepAlive()
+	}
+
+	#resumeSmallWindowUpdates(): void {
+		if (this.#smallWindowMode !== SMALL_WINDOW_DISABLED) {
+			this.#device.resumeKeepAlive()
 		}
 	}
 }
