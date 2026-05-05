@@ -37,6 +37,8 @@ export enum Command {
 	OUT_SET_SMALL_WINDOW_DATA = 0x0006,
 	OUT_SET_BRIGHTNESS = 0x000a,
 	OUT_SET_LABEL_STYLE = 0x000b,
+	OUT_LOCKSCREEN = 0x000f,
+	OUT_UNLOCKSCREEN = 0x0010,
 
 	IN_BUTTON = 0x0101,
 	IN_DEVICE_INFO = 0x0303,
@@ -156,7 +158,6 @@ export function parseIncoming(
 		if (data[3] === 0x01) action = 'press'
 		else if (data[3] === 0x02) action = 'left'
 		else if (data[3] === 0x03) action = 'right'
-		
 		return {
 			kind: 'input',
 			event: {

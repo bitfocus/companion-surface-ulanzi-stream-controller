@@ -48,6 +48,7 @@ export class D200Device extends EventEmitter<D200Events> {
 			this.emit('error', e as Error)
 		})
 		device.on('data', (data: Buffer) => {
+			if (isAckPacket(data)) return
 			this.emit('log', `RX ${data.length}B: ${data.subarray(0, 16).toString('hex')}`)
 			const parsed = parseIncoming(data)
 			if (!parsed) {
@@ -105,6 +106,14 @@ export class D200Device extends EventEmitter<D200Events> {
 
 	async setSmallWindow(data: SmallWindowData): Promise<void> {
 		await this.#writePacket(buildSimplePacket(Command.OUT_SET_SMALL_WINDOW_DATA, encodeSmallWindow(data)))
+	}
+
+	async lockScreen(): Promise<void> {
+		await this.#writePacket(buildSimplePacket(Command.OUT_LOCKSCREEN, Buffer.alloc(0)))
+	}
+
+	async unlockScreen(): Promise<void> {
+		await this.#writePacket(buildSimplePacket(Command.OUT_UNLOCKSCREEN, Buffer.alloc(0)))
 	}
 
 	setSmallWindowMode(mode: SmallWindowMode): void {
@@ -167,6 +176,10 @@ export class D200Device extends EventEmitter<D200Events> {
 		this.#writeQueue = job.catch(() => undefined)
 		return job
 	}
+}
+
+function isAckPacket(report: Buffer): boolean {
+	return report.length >= 4 && report[0] === 0x7c && report[1] === 0x7c && report.readUInt16BE(2) === 0x010b
 }
 
 function sampleCpu(): { idle: number; total: number } {

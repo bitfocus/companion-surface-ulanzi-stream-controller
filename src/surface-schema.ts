@@ -28,12 +28,27 @@ interface InputControlDef {
 	row: number
 }
 
+interface VirtualControlDef {
+	controlId: string
+	col: number
+	row: number
+}
+
+const VIRTUAL_ENCODER_TURN_CONTROLS: ReadonlyArray<VirtualControlDef> = [
+	{ controlId: 'enc_1_left', col: 0, row: 4 },
+	{ controlId: 'enc_1_right', col: 1, row: 4 },
+	{ controlId: 'enc_2_left', col: 2, row: 4 },
+	{ controlId: 'enc_2_right', col: 3, row: 4 },
+	{ controlId: 'enc_3_left', col: 1, row: 5 },
+	{ controlId: 'enc_3_right', col: 2, row: 5 },
+]
+
 /**
  * Complete input map for the D200X. Maps device input indices to control IDs.
  *
  * Indices 0–12: LCD grid buttons (same as D200)
- * Index 13: small-window touch area (D200X only)
- * Index 14: unused
+ * Index 13: small-window slot (status display, not a button/control)
+ * Index 14: does not exist
  * Index 15: left page button
  * Index 16: right page button
  * Index 17: encoder 1
@@ -79,8 +94,13 @@ export function indexFromControlId(controlId: string): number | null {
 export function positionFromControlId(controlId: string): { col: number; row: number } | null {
 	const idx = indexFromControlId(controlId)
 	const entry = idx !== null ? INPUT_CONTROLS[idx] : null
-	if (!entry) return null
+	if (!entry || entry.type !== 'button') return null
 	return { col: entry.col, row: entry.row }
+}
+
+export function virtualTurnControlId(controlId: string, direction: 'left' | 'right'): string | null {
+	if (controlId !== 'enc_1' && controlId !== 'enc_2' && controlId !== 'enc_3') return null
+	return `${controlId}_${direction}`
 }
 
 /**
@@ -97,7 +117,7 @@ export const PINCODE_MAP: SurfacePincodeMap = {
 	0: '3_1',
 }
 
-export function createSurfaceSchema(smallWindowEnabled: boolean): SurfaceSchemaLayoutDefinition {
+export function createSurfaceSchema(): SurfaceSchemaLayoutDefinition {
 	const layout: SurfaceSchemaLayoutDefinition = {
 		stylePresets: {
 			default: {},
@@ -111,11 +131,10 @@ export function createSurfaceSchema(smallWindowEnabled: boolean): SurfaceSchemaL
 		controls: {},
 	}
 	for (const { col, row } of LCD_BUTTON_POSITIONS) {
-		const isSmallWindowSlot = col === 3 && row === 2
 		layout.controls[`${col}_${row}`] = {
 			row,
 			column: col,
-			stylePreset: isSmallWindowSlot && !smallWindowEnabled ? 'wide' : 'button',
+			stylePreset: col === 3 && row === 2 ? 'wide' : 'button',
 		}
 	}
 	for (const entry of INPUT_CONTROLS) {
@@ -123,6 +142,13 @@ export function createSurfaceSchema(smallWindowEnabled: boolean): SurfaceSchemaL
 		layout.controls[entry.controlId] = {
 			row: entry.row,
 			column: entry.col,
+		}
+	}
+	for (const entry of VIRTUAL_ENCODER_TURN_CONTROLS) {
+		layout.controls[entry.controlId] = {
+			row: entry.row,
+			column: entry.col,
+			stylePreset: 'button',
 		}
 	}
 	return layout

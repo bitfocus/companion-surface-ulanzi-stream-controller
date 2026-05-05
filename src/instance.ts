@@ -15,10 +15,16 @@ import {
 	ICON_WIDTH,
 	SMALL_WINDOW_BG_HEIGHT,
 	SMALL_WINDOW_BG_WIDTH,
+	SmallWindowMode,
 } from './protocol.js'
 import { SMALL_WINDOW_DISABLED } from './config.js'
 import { type ButtonRenderInput } from './zip-builder.js'
-import { LCD_BUTTON_POSITIONS, controlIdFromIndex, positionFromControlId } from './surface-schema.js'
+import {
+	LCD_BUTTON_POSITIONS,
+	controlIdFromIndex,
+	positionFromControlId,
+	virtualTurnControlId,
+} from './surface-schema.js'
 
 export class D200Surface implements SurfaceInstance {
 	readonly #logger: ModuleLogger
@@ -28,10 +34,17 @@ export class D200Surface implements SurfaceInstance {
 
 	/** Keyed by controlId (`col_row`). */
 	readonly #pending = new Map<string, ButtonRenderInput>()
+	readonly #renderCache = new Map<string, ButtonRenderInput>()
 	#flushTimer?: NodeJS.Timeout
+	#screensaverTimer?: NodeJS.Timeout
 	#initialPushDone = false
 	#statusActive = false
+	#screensaverEnabled = false
+	#screensaverMinutes = 5
+	#screensaverActive = false
+	#screensaverWaking = false
 	#smallWindowMode: number = SMALL_WINDOW_DISABLED
+	#pageButtonsNavigate = true
 
 	public get surfaceId(): string {
 		return this.#surfaceId
@@ -51,22 +64,7 @@ export class D200Surface implements SurfaceInstance {
 			context.disconnect(e)
 		})
 		this.#device.on('input', (event) => {
-			const controlId = controlIdFromIndex(event.index)
-			if (!controlId) return
-
-			if (event.type === 'encoder') {
-				if (event.action === 'left') this.#context.rotateLeftById(controlId)
-				else if (event.action === 'right') this.#context.rotateRightById(controlId)
-				else if (event.action === 'press') this.#context.keyDownById(controlId)
-				else if (event.action === 'release') this.#context.keyUpById(controlId)
-			} else if (controlId === 'page_left') {
-				if (event.action === 'press') this.#context.changePage(false)
-			} else if (controlId === 'page_right') {
-				if (event.action === 'press') this.#context.changePage(true)
-			} else {
-				if (event.action === 'press') this.#context.keyDownById(controlId)
-				else if (event.action === 'release') this.#context.keyUpById(controlId)
-			}
+			void this.#handleInputEvent(event)
 		})
 		this.#device.on('deviceInfo', (info) => {
 			this.#logger.info(`Device info: ${info}`)
@@ -74,17 +72,73 @@ export class D200Surface implements SurfaceInstance {
 		this.#device.on('log', (line) => this.#logger.info(line))
 	}
 
+	#pulseVirtualControl(controlId: string, direction: 'left' | 'right'): void {
+		const virtualId = virtualTurnControlId(controlId, direction)
+		if (!virtualId) return
+		this.#context.keyDownById(virtualId)
+		this.#context.keyUpById(virtualId)
+	}
+
+	async #handleInputEvent(event: { index: number; type: 'button' | 'encoder'; action: 'press' | 'release' | 'left' | 'right' }): Promise<void> {
+		const controlId = controlIdFromIndex(event.index)
+		if (!controlId) return
+
+		if (this.#screensaverActive) {
+			if (this.#screensaverWaking) return
+			await this.#wakeFromScreensaver()
+			this.#resetScreensaverTimer()
+			return
+		}
+
+		this.#recordActivity()
+
+		if (event.type === 'encoder') {
+			if (event.action === 'left') {
+				this.#context.rotateLeftById(controlId)
+				this.#pulseVirtualControl(controlId, 'left')
+			}
+			else if (event.action === 'right') {
+				this.#context.rotateRightById(controlId)
+				this.#pulseVirtualControl(controlId, 'right')
+			}
+			else if (event.action === 'press') this.#context.keyDownById(controlId)
+			else if (event.action === 'release') this.#context.keyUpById(controlId)
+		} else if (controlId === 'page_left') {
+			if (this.#pageButtonsNavigate) {
+				if (event.action === 'press') this.#context.changePage(false)
+			} else {
+				if (event.action === 'press') this.#context.keyDownById(controlId)
+				else if (event.action === 'release') this.#context.keyUpById(controlId)
+			}
+		} else if (controlId === 'page_right') {
+			if (this.#pageButtonsNavigate) {
+				if (event.action === 'press') this.#context.changePage(true)
+			} else {
+				if (event.action === 'press') this.#context.keyDownById(controlId)
+				else if (event.action === 'release') this.#context.keyUpById(controlId)
+			}
+		} else {
+			if (event.action === 'press') this.#context.keyDownById(controlId)
+			else if (event.action === 'release') this.#context.keyUpById(controlId)
+		}
+	}
+
 	async init(): Promise<void> {
 		for (const pos of LCD_BUTTON_POSITIONS) {
 			const key = `${pos.col}_${pos.row}`
-			this.#pending.set(key, { col: pos.col, row: pos.row })
+			const blank = { col: pos.col, row: pos.row }
+			this.#pending.set(key, blank)
+			this.#renderCache.set(key, blank)
 		}
 		await this.#flush(false)
 		this.#initialPushDone = true
+		this.#applySmallWindowConfig()
+		this.#resetScreensaverTimer()
 	}
 
 	async close(): Promise<void> {
 		if (this.#flushTimer) clearTimeout(this.#flushTimer)
+		if (this.#screensaverTimer) clearTimeout(this.#screensaverTimer)
 		await this.#device.close()
 	}
 
@@ -95,14 +149,15 @@ export class D200Surface implements SurfaceInstance {
 	async updateConfig(config: Record<string, any>): Promise<void> {
 		const mode = Number(config.smallWindowMode ?? SMALL_WINDOW_DISABLED)
 		this.#smallWindowMode = mode
-
-		if (mode === SMALL_WINDOW_DISABLED) {
-			this.#device.pauseKeepAlive()
-		} else {
-			this.#device.setSmallWindowMode(mode)
-			this.#device.setTwelveHour(!!config.twelveHour)
-			this.#device.resumeKeepAlive()
+		this.#pageButtonsNavigate = config.pageButtonsNavigate !== false
+		this.#screensaverEnabled = config.screensaverEnabled === true
+		this.#screensaverMinutes = Number(config.screensaverMinutes || 5)
+		this.#device.setTwelveHour(!!config.twelveHour)
+		this.#applySmallWindowConfig()
+		if (this.#screensaverActive && !this.#screensaverEnabled) {
+			await this.#wakeFromScreensaver()
 		}
+		this.#resetScreensaverTimer()
 	}
 
 	async ready(): Promise<void> {}
@@ -122,14 +177,17 @@ export class D200Surface implements SurfaceInstance {
 		const pos = positionFromControlId(drawProps.controlId)
 		if (!pos) return
 		const key = `${pos.col}_${pos.row}`
+		const isSmallWindowSlot = pos.col === 3 && pos.row === 2
 
 		if (!drawProps.image) {
-			this.#pending.set(key, { col: pos.col, row: pos.row })
+			const blank = { col: pos.col, row: pos.row }
+			this.#pending.set(key, blank)
+			this.#renderCache.set(key, blank)
+			if (this.#screensaverActive) return
 			this.#scheduleFlush()
 			return
 		}
 
-		const isSmallWindowSlot = pos.col === 3 && pos.row === 2
 		const iconW = isSmallWindowSlot ? SMALL_WINDOW_BG_WIDTH : ICON_WIDTH
 		const iconH = isSmallWindowSlot ? SMALL_WINDOW_BG_HEIGHT : ICON_HEIGHT
 
@@ -146,13 +204,19 @@ export class D200Surface implements SurfaceInstance {
 			row: pos.row,
 			iconPng: Buffer.from(png.buffer),
 		})
+		this.#renderCache.set(key, {
+			col: pos.col,
+			row: pos.row,
+			iconPng: Buffer.from(png.buffer),
+		})
+		if (this.#screensaverActive) return
 		this.#scheduleFlush()
 	}
 
 	async showStatus(signal: AbortSignal, cards: CardGenerator, _statusMessage?: string): Promise<void> {
 		if (signal.aborted) return
 
-		this.#device.pauseKeepAlive()
+		this.#pauseSmallWindowUpdates()
 
 		const buttonPixels = await cards.generateLogoCard(SMALL_WINDOW_BG_WIDTH, SMALL_WINDOW_BG_HEIGHT, 'rgb')
 		if (signal.aborted) return
@@ -191,13 +255,12 @@ export class D200Surface implements SurfaceInstance {
 	}
 
 	async #flush(partial: boolean): Promise<void> {
+		if (this.#screensaverActive) return
 		if (this.#pending.size === 0) return
 		let isPartial = partial && this.#initialPushDone
 		if (this.#statusActive) {
 			this.#statusActive = false
-			if (this.#smallWindowMode !== SMALL_WINDOW_DISABLED) {
-				this.#device.resumeKeepAlive()
-			}
+			this.#resumeSmallWindowUpdates()
 			isPartial = false
 			for (const pos of LCD_BUTTON_POSITIONS) {
 				const key = `${pos.col}_${pos.row}`
@@ -213,6 +276,95 @@ export class D200Surface implements SurfaceInstance {
 			})
 		} catch (e) {
 			this.#logger.warn(`setButtons failed: ${(e as Error).message}`)
+		}
+	}
+
+	#recordActivity(): void {
+		if (this.#screensaverActive) {
+			void this.#wakeFromScreensaver()
+		}
+		this.#resetScreensaverTimer()
+	}
+
+	#resetScreensaverTimer(): void {
+		if (this.#screensaverTimer) {
+			clearTimeout(this.#screensaverTimer)
+			this.#screensaverTimer = undefined
+		}
+		if (!this.#screensaverEnabled || this.#screensaverMinutes <= 0) return
+		this.#screensaverTimer = setTimeout(() => {
+			void this.#activateScreensaver()
+		}, this.#screensaverMinutes * 60 * 1000)
+	}
+
+	async #activateScreensaver(): Promise<void> {
+		if (this.#screensaverActive) return
+		this.#screensaverActive = true
+		this.#pauseSmallWindowUpdates()
+		try {
+			await this.#device.lockScreen()
+		} catch (e) {
+			this.#logger.warn(`screensaver lock failed: ${(e as Error).message}`)
+		}
+	}
+
+	async #wakeFromScreensaver(): Promise<void> {
+		if (!this.#screensaverActive) return
+		if (this.#screensaverWaking) return
+		this.#screensaverWaking = true
+		try {
+			await this.#device.unlockScreen()
+		} catch (e) {
+			this.#logger.warn(`screensaver unlock failed: ${(e as Error).message}`)
+			this.#screensaverWaking = false
+			return
+		}
+		this.#screensaverActive = false
+		if (this.#flushTimer) {
+			clearTimeout(this.#flushTimer)
+			this.#flushTimer = undefined
+		}
+		this.#restoreCachedButtonsToPending()
+		this.#resumeSmallWindowUpdates()
+		await this.#flushNow(false)
+		this.#resetScreensaverTimer()
+		this.#screensaverWaking = false
+	}
+
+	#restoreCachedButtonsToPending(): void {
+		for (const pos of LCD_BUTTON_POSITIONS) {
+			const key = `${pos.col}_${pos.row}`
+			this.#pending.set(key, this.#renderCache.get(key) ?? { col: pos.col, row: pos.row })
+		}
+	}
+
+	async #flushNow(partial: boolean): Promise<void> {
+		const wasActive = this.#screensaverActive
+		this.#screensaverActive = false
+		try {
+			await this.#flush(partial)
+		} finally {
+			this.#screensaverActive = wasActive
+		}
+	}
+
+	#applySmallWindowConfig(): void {
+		if (this.#smallWindowMode === SMALL_WINDOW_DISABLED) {
+			this.#device.setSmallWindowMode(SmallWindowMode.BACKGROUND)
+			this.#device.pauseKeepAlive()
+		} else {
+			this.#device.setSmallWindowMode(this.#smallWindowMode)
+			this.#device.resumeKeepAlive()
+		}
+	}
+
+	#pauseSmallWindowUpdates(): void {
+		this.#device.pauseKeepAlive()
+	}
+
+	#resumeSmallWindowUpdates(): void {
+		if (this.#smallWindowMode !== SMALL_WINDOW_DISABLED) {
+			this.#device.resumeKeepAlive()
 		}
 	}
 }
