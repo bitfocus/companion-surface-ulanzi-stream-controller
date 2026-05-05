@@ -60,7 +60,7 @@ idVendor:           0x2207 (Fuzhou Rockchip Electronics)
 idProduct:          0x0019
 iProduct:           "ulanzi"
 iManufacturer:      "Zkswe"
-iSerial:            e.g. "XXXXXXXXXXXXXXXXX"
+iSerial:            e.g. "XXXXXXXXXXXXXXXXX" (17 ASCII chars)
 bcdDevice:          0xffff
 
 Interface 0:

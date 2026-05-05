@@ -306,7 +306,7 @@ numbers:
 | `0x000a` | `strtol()` → brightness | Sets backlight brightness (0-100) |
 | `0x000b` | `parseFontInfo()` | Sets default label font style |
 | `0x00d0` | `packageHardwareInfo()` | Returns hardware info JSON |
-| `0x00fe` | `SecurityManager::writeSecData()` | Writes serial number (17 bytes) |
+| `0x00fe` | `SecurityManager::writeSecData(buf, 17, page=3)` | Writes 17-byte SerialNumber to secure flash. See "Serial number storage" below. |
 | `0x00ff` | `SystemProperties::setString("sys.usb.config", "adb")` | **Switches USB to ADB mode** |
 
 Additional commands handled in `threadLoop()` before reaching `processMessage()`
@@ -320,7 +320,7 @@ the dispatch yet.
 |----------|--------|----------|
 | `0x0004` | Kills display application | Replug USB |
 | `0x000f` | Activates lockscreen | Send `0x0010` to unlock |
-| `0x00fe` | Writes serial number to flash | Irreversible (writes to SecurityManager) |
+| `0x00fe` | Writes 17-byte SerialNumber to secure flash page 3 | Overwritable (re-send with corrected bytes); cannot revert to "blank". Page does not auto-lock. |
 | `0x00ff` | Switches to ADB, drops HID | Replug USB to restore HID |
 
 ---
@@ -338,6 +338,120 @@ Returned by command `0x0003`:
   "HardwareVersion": "SSD210V100"
 }
 ```
+
+---
+
+## Serial number storage
+
+The D200 SerialNumber (17 ASCII chars, e.g. `XXXXXXXXXXXXXXXXX`) is stored in
+**SigmaStar OFlash** (a separate "overlay flash" region exposed at `/dev/oflash`,
+distinct from MTD), not in any of the MTD partitions. OFlash is page-keyed: a
+raw `cat /dev/oflash` returns 0 bytes — reads only succeed via an ioctl that
+specifies which page to access.
+
+### Where it lives in the firmware
+
+`SecurityManager` is **not** in `libzkgui.so` despite the dispatch happening
+there. It lives in `/lib/libeasyui.so`. The C++ class is a paper-thin wrapper
+(4–16 byte methods) that tail-calls into the underlying `zk_security_*` C API
+in the same library. Layout:
+
+```
+HidProtocolHelper::processMessage(0x00FE, payload)            [libzkgui.so]
+  └─ memcpy(buf, payload, 17)
+  └─ SecurityManager::writeSecData(buf, 17, page=3)           [libeasyui.so, thunk]
+       └─ zk_security_write_data(buf, 17, page=3)             [libeasyui.so]
+            └─ <auth_struct>->write_data(buf, 17, page=3)     [libeasyui.so via vtable]
+                 └─ ioctl on /dev/oflash                      [kernel]
+```
+
+The `<auth_struct>` is selected at runtime between `oflash_sec_auth` and
+`pflash_sec_auth` (both 44-byte function-pointer tables in `.data`). On
+SSD21X devices like the D200, `oflash_sec_auth` is used. Offsets in the table:
+
+| Offset | Function |
+|--------|----------|
+| 24 | `write_data` (called by `zk_security_write_data`) |
+| 28 | `read_data` (called by `zk_security_read_data`) |
+
+### Wire format for `0x00FE`
+
+Standard HID frame (1024-byte interrupt packet, prefixed with HID report ID
+`0x00` for the OS write):
+
+```
+offset  size  value
+0x00    1     0x00          HID report ID
+0x01    2     7c 7c         Magic
+0x03    2     00 fe         Command (BE u16)
+0x05    4     11 00 00 00   Payload length (LE u32) = 17
+0x09    17    <17 ASCII chars of SerialNumber>
+0x1A    998   00…00         Zero padding to 1024
+```
+
+The handler reads exactly 17 bytes via `memcpy` regardless of the declared
+length — sending fewer bytes leaves the tail of the local buffer uninitialised
+(zeroed first by the caller), so the on-flash bytes will be `<your_payload> ||
+\0\0…`. Sending more bytes is a no-op past byte 17.
+
+### Verified disassembly
+
+`libzkgui.so` (firmware build `20250728`, md5 `bfdf68c16f6170064adc8b403074bf93`),
+inside `HidProtocolHelper::processMessage`:
+
+```
+0x99644: ldr  r1, [sl]                         ; r1 = data.c_str()
+0x99648: mov  r0, r9                           ; r0 = &local_buf
+0x9964c: mov  r2, #17                          ; len = 17
+0x99650-0x99660: zero-init local_buf (24 bytes)
+0x99664: bl   memcpy@plt                       ; memcpy(local_buf, payload, 17)
+0x996a4: bl   SecurityManager::getInstance@plt
+0x996a8: mov  r1, r9                           ; arg2 = buf
+0x996ac: mov  r3, #3                           ; arg4 = page = 3   ← hardcoded
+0x996b0: mov  r2, #17                          ; arg3 = len = 17   ← hardcoded
+0x996b4: bl   SecurityManager::writeSecData@plt
+```
+
+The page enum value `3` and length `17` are hardcoded in the dispatcher —
+malformed packets cannot accidentally clobber other secure-flash slots
+(MAC/UUID/etc).
+
+### Recovery: rewriting a wiped serial
+
+Symptom: Ulanzi Studio fails to connect / repeatedly tries to reflash. Check
+`/sys/class/zkswe_usb/zkswe0/iSerial` via ADB — if it reads
+`0123456789ABCDEF` (kernel default) instead of the actual serial, the secure
+flash slot is empty/invalid and `zkgui` falls through to the kernel default at
+boot.
+
+The original serial may still be cached in:
+- Windows PnP database — `Get-PnpDevice | Where-Object { $_.InstanceId -match "VID_2207" }`
+  shows stale entries with the historical serial in the InstanceId
+- Saved Wireshark captures of any prior `0x0303 IN_DEVICE_INFO` exchange
+- The label on the back of the device (if not worn off)
+
+Two recovery paths:
+
+**Persistent (writes flash):**
+
+```bash
+node tools/write-serial.mjs <your-17-char-serial>   # exactly 17 ASCII chars
+# replug the device — at boot zkgui reads page 3 and writes it to iSerial
+```
+
+**Runtime override (no flash write, lost on power-cycle):**
+
+```bash
+node tools/enable-adb.mjs                       # switch to ADB mode
+adb shell 'echo -n "<your-17-char-serial>" > /sys/class/zkswe_usb/zkswe0/iSerial'
+# replug — Studio sees the value until next power-cycle
+```
+
+The `init.rc` `on property:sys.usb.config=hid` handler re-writes
+`iProduct`/`idVendor`/`idProduct`/`functions`/`enable` but **does not** touch
+`iSerial`. So whatever wrote `iSerial` originally is `zkgui` itself, reading
+from secure flash via `SecurityManager::readSecData(buf, 17, page=3)` — which
+returns the kernel-default placeholder when the slot is empty.
 
 ---
 
@@ -359,8 +473,8 @@ The HID protocol exposes `UPDATE_BIN` for host-initiated updates.
 
 | File | Location | Size | Purpose |
 |------|----------|------|---------|
-| `libzkgui.so` | `/res/lib/` (mtd3) | 1.3 MB | Main app: HID protocol, manifest parsing, rendering, OTA. Primary Ghidra target. |
-| `libeasyui.so` | `/lib/` (mtd2) | 822 KB | ZKSWE UI framework |
+| `libzkgui.so` | `/res/lib/` (mtd3) | 1.3 MB | Main app: HID protocol dispatch (`HidProtocolHelper::processMessage`), manifest parsing, rendering, OTA. Primary Ghidra target. |
+| `libeasyui.so` | `/lib/` (mtd2) | 822 KB | ZKSWE UI framework — **also hosts `SecurityManager` and the `zk_security_*` C API plus the `oflash_sec_auth` / `pflash_sec_auth` vtables**. |
 | `libinternalapp.so` | `/lib/` (mtd2) | 181 KB | Internal app support |
 | `zkgui` | `/bin/` (mtd2) | 9.5 KB | Thin launcher, loads libzkgui.so |
 | `EasyUI.cfg` | `/res/etc/` (mtd3) | 238 B | App configuration |
@@ -385,5 +499,14 @@ Copies for analysis:
   update.img. Updated via `McuUpdate` class.
 - **`IconEx` field semantics**: parsed alongside `Icon` in manifests, purpose
   unclear.
-- **Boot partition (mtd0)**: SoC bootloader, not dumped.
-- **Kernel (mtd1)**: Linux kernel image, not analyzed.
+- **Kernel (mtd1)**: dumped (1.7 MB) but not analyzed. Contains the
+  compiled-in `iSerial` default `0123456789ABCDEF` referenced by the
+  `zkswe_usb` gadget driver when secure flash returns no value.
+- **OFlash page enum**: only page 3 (SerialNumber) is documented. Other pages
+  (likely MAC, UUID, license, calibration) are referenced via
+  `SecurityManager::{getDevID, getUuid, lockSecData, isSecDataLock}` but the
+  page numbers and contents have not been mapped.
+- **`zk_security_authorize` (2.6 KB) and `zk_security_decrypt` (5.2 KB)**:
+  large crypto routines in libeasyui suggesting some pages require
+  authorization before read/write. The 0x00FE handler does not call
+  `authorize` and writes succeed anyway — page 3 appears to be unauthenticated.
