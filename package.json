@@ -1,6 +1,6 @@
 {
 	"name": "companion-surface-ulanzi-stream-controller",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"main": "dist/main.js",
 	"type": "module",
 	"author": "Joel Calado <joelcalado@gmail.com>",

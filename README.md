@@ -1,5 +1,10 @@
 # companion-surface-ulanzi-stream-controller
 
+> [!TIP]
+> If this plugin is useful to you, you can buy me a coffee at
+> [ko-fi.com/jcalado](https://ko-fi.com/jcalado). Support helps keep the project
+> maintained and encourages future work (more surfaces, bug fixes, features).
+
 Companion surface plugin for the **[Ulanzi Stream Controller D200 / D200X](https://www.ulanzi.com/products/stream-controller-d200)**: 13–14 physical
 buttons on a 5×3 grid plus a status window, 196×196 px icons.
 
@@ -47,12 +52,6 @@ yarn package   # full package for Companion
 ## Not yet implemented
 
 - Keyboard emulation on interface 1 (intentionally left to `usbhid`)
-
-## Support the project
-
-If this plugin is useful to you, you can buy me a coffee at
-[ko-fi.com/jcalado](https://ko-fi.com/jcalado). Support helps keep the project
-maintained and encourages future work (more surfaces, bug fixes, features).
 
 ## License
 

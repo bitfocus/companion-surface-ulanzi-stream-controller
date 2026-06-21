@@ -979,9 +979,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"companion-surface-ulanzi-d200@workspace:.":
+"companion-surface-ulanzi-stream-controller@workspace:.":
   version: 0.0.0-use.local
-  resolution: "companion-surface-ulanzi-d200@workspace:."
+  resolution: "companion-surface-ulanzi-stream-controller@workspace:."
   dependencies:
     "@companion-module/tools": "npm:^2.7.1"
     "@companion-surface/base": "npm:~1.1.0"
