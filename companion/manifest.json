@@ -1,21 +1,21 @@
 {
 	"$schema": "../node_modules/@companion-surface/base/assets/manifest.schema.json",
 	"type": "surface",
-	"id": "ulanzi-d200",
-	"name": "Ulanzi Stream Controller D200",
-	"shortname": "ulanzi-d200",
-	"description": "Companion surface plugin for the Ulanzi Stream Controller D200 (13 buttons, 196x196 icons).",
+	"id": "ulanzi-stream-controller",
+	"name": "Ulanzi Stream Controller",
+	"shortname": "ulanzi-stream-controller",
+	"description": "Companion surface plugin for the Ulanzi Stream Controller D200 and D200X (13/14 buttons, 196x196 icons).",
 	"version": "0.0.0",
 	"license": "MIT",
-	"repository": "",
-	"bugs": "",
-	"maintainers": [],
+	"repository": "https://github.com/bitfocus/companion-surface-ulanzi-stream-controller.git",
+	"bugs": "https://github.com/bitfocus/companion-surface-ulanzi-stream-controller/issues",
+	"maintainers": [{ "name": "Joel Calado", "github": "jcalado", "email": "joelcalado@gmail.com" }],
 	"runtime": {
 		"type": "node22",
 		"apiVersion": "0.0.0",
 		"entrypoint": "../dist/main.js"
 	},
-	"keywords": ["ulanzi", "d200", "stream controller", "stream deck"],
-	"products": ["Ulanzi Stream Controller D200"],
+	"keywords": ["ulanzi", "d200", "d200x", "stream controller", "stream deck"],
+	"products": ["Ulanzi Stream Controller D200", "Ulanzi Stream Controller D200X"],
 	"usbIds": [{ "vendorId": 8711, "productIds": [25] }]
 }
