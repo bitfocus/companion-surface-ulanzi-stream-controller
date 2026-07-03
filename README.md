@@ -16,14 +16,17 @@ Ulanzi Studio.
 ## Features
 
 - 13 configurable buttons, each with a Companion-rendered icon
-- Brightness control from Companion
 - Button press/release events
-- Small-window status display with seven modes (analog dial clock, four
+- Brightness control from Companion
+- Page navigation from the two bottom-outer buttons (previous / next),
+  gated by Companion's own per-surface page-navigation setting
+- Small-window status display with seven modes — analog dial clock, four
   digital clock variants (time; time + weekday; time + date; date + time +
-  weekday), system stats (CPU / RAM), or a custom background image),
-  selectable per-surface via the ⚙ **Config** panel. Digital modes honour a
-  12/24-hour checkbox. Background images are loaded from a local file path
-  (PNG/JPEG), automatically resized and center-cropped to 458×196.
+  weekday), system stats (CPU / RAM), or a custom background image — selectable
+  per surface via the ⚙ **Config** panel. Digital modes honour a 12/24-hour
+  checkbox. The background image is loaded from a local file path (PNG/JPEG) and
+  scaled to fill the 458×196 window.
+- Optional idle screensaver that blanks the LCDs via the firmware lockscreen
 
 ## Quickstart
 
@@ -35,8 +38,18 @@ yarn build
 ```
 
 Then register the build directory with Companion as a developer module and
-enable it under **Modules → Surfaces**. Windows works out of the box; Linux
-needs a udev rule and a USB 2.0 hub.
+enable it under **Modules → Surfaces**. Plug the device in and it appears under
+**Surfaces**.
+
+- **Windows / macOS** — works out of the box once Ulanzi Studio is closed (Studio
+  fights Companion for the USB interface).
+- **Linux** — the device needs access to its `/dev/hidraw*` nodes.
+  Companion 4.3+ generates the required udev rule automatically from the module's
+  declared USB IDs (`companion-sync-udev-rules`); on companion-pi this is handled
+  for you, and Companion 5.0+ offers a one-click sync (or suggests a one-line
+  command) when it detects the device lacks access. If your Companion version
+  doesn't sync the rule, apply it manually with `sudo ./tools/install-udev.sh` —
+  see [**SETUP.md**](./SETUP.md).
 
 See [**SETUP.md**](./SETUP.md) for the full walkthrough, platform notes,
 firmware quirks, and troubleshooting.
