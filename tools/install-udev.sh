@@ -21,5 +21,5 @@ echo "Wrote $RULE_FILE"
 udevadm control --reload-rules
 udevadm trigger --attr-match=idVendor=2207 --attr-match=idProduct=0019 || true
 
-echo "Rules reloaded. Unplug and replug the D200 (through the USB hub) for them to take effect."
+echo "Rules reloaded. Unplug and replug the D200 for them to take effect."
 echo "After replug, verify with: ls -la /dev/hidraw* | tail -2"

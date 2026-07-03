@@ -28,13 +28,6 @@ export const CONFIG_FIELDS: SomeCompanionInputField[] = [
 		tooltip: 'Only applies when small window mode is set to a device digital clock option.',
 	},
 	{
-		id: 'pageButtonsNavigate',
-		type: 'checkbox',
-		label: 'Use page buttons for page navigation',
-		default: true,
-		tooltip: 'When enabled, the two bottom outer buttons switch Companion pages. When disabled, they act as normal programmable controls (`page_left` / `page_right`).',
-	},
-	{
 		id: 'screensaverEnabled',
 		type: 'checkbox',
 		label: 'Enable idle blank screensaver',
@@ -53,8 +46,8 @@ export const CONFIG_FIELDS: SomeCompanionInputField[] = [
 	{
 		id: 'backgroundImagePath',
 		type: 'textinput',
-		label: 'Background image path (PNG/JPEG, 458×196)',
+		label: 'Background image path (PNG/JPEG)',
 		default: '',
-		tooltip: 'Only applies when small window mode is set to "Background image".',
+		tooltip: 'Path to an image file shown in the 3_2 slot. The image is scaled to fill 458×196. Only applies when small window mode is set to "Background image".',
 	},
 ]

@@ -54,10 +54,10 @@ D200.
 
 - **Windows** — works out of the box once Ulanzi Studio is closed.
 - **macOS** — expected to work like Windows (untested).
-- **Linux** — requires a udev rule granting access to the device's
-  `/dev/hidraw*` nodes, and a USB 2.0 hub between the device and the host.
-  Connecting through a USB-2 hub rather than directly is the single most
-  important point on Linux.
+- **Linux** — needs access to the device's `/dev/hidraw*` nodes via a udev
+  rule. Companion 5.0+ can install the udev rule for you (one click, or a
+  suggested one-line command); on companion-pi this is handled automatically.
+  Otherwise apply the rule manually (see the setup walkthrough).
 
 See the project repository for the full setup walkthrough, udev rule, firmware
 quirks, and troubleshooting.

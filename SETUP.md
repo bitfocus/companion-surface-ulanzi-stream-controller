@@ -5,12 +5,12 @@
 | Platform | Status | Extra steps |
 |----------|--------|-------------|
 | Windows  | ✅ Works out of the box | None — just build and register as a developer module |
-| Linux    | ⚠️ Works with workarounds | udev rule + USB 2.0 hub (see below) |
+| Linux    | ⚠️ Works with workarounds | udev rule (see below) |
 | macOS    | 🤷 Untested | Likely works like Windows; hidraw-style access is default |
 
 Tested on:
 - Windows 10/11 (direct USB connection)
-- Arch Linux (kernel 6.19) with Companion 4.3.0 (via USB-2 hub)
+- Arch Linux (kernel 6.19) with Companion 4.3.0
 
 ## Required (all platforms)
 
@@ -19,8 +19,11 @@ Tested on:
 
 ## Linux-only
 
-- **USB 2.0 hub between the D200 and the host.** See [Direct connection vs. USB hub](#direct-connection-vs-usb-hub) below — this is the single most important point. A plain unpowered USB-2 hub works.
 - **udev rule** granting access to the device's `/dev/hidraw*` nodes.
+
+> If the surface never appears under **Surfaces** despite the module loading, see
+> [Direct connection vs. USB hub](#direct-connection-vs-usb-hub) below for a known
+> enumeration workaround.
 
 ## Build (all platforms)
 
@@ -72,6 +75,11 @@ On Windows this is the whole setup. On Linux, continue with the steps below.
 
 ## Linux: install the udev rule
 
+> **Companion 5.0+** can install this rule for you — it offers a one-click sync
+> (or suggests a one-line command) when it detects the device lacks access, and
+> on companion-pi it is handled automatically. If your Companion version does
+> that, you can skip this section. Otherwise install the rule manually:
+
 ```bash
 sudo ./tools/install-udev.sh
 ```
@@ -83,7 +91,7 @@ KERNEL=="hidraw*", ATTRS{idVendor}=="2207", ATTRS{idProduct}=="0019", MODE="0660
 SUBSYSTEM=="usb",  ATTRS{idVendor}=="2207", ATTRS{idProduct}=="0019", MODE="0660", GROUP="input", TAG+="uaccess"
 ```
 
-Unplug/replug the D200 (through the hub) after installing.
+Unplug/replug the D200 after installing.
 
 Verify:
 

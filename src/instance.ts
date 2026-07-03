@@ -8,6 +8,7 @@ import {
 	type ModuleLogger,
 } from '@companion-surface/base'
 import * as imageRs from '@julusian/image-rs'
+import { readFile } from 'node:fs/promises'
 import type { HIDAsync } from 'node-hid'
 import { D200Device } from './device.js'
 import {
@@ -44,7 +45,9 @@ export class D200Surface implements SurfaceInstance {
 	#screensaverActive = false
 	#screensaverWaking = false
 	#smallWindowMode: number = SMALL_WINDOW_DISABLED
-	#pageButtonsNavigate = true
+	#backgroundImagePath = ''
+	/** PNG for the "Background image" small-window mode, scaled to 458×196. */
+	#backgroundPng?: Buffer
 
 	public get surfaceId(): string {
 		return this.#surfaceId
@@ -104,19 +107,9 @@ export class D200Surface implements SurfaceInstance {
 			else if (event.action === 'press') this.#context.keyDownById(controlId)
 			else if (event.action === 'release') this.#context.keyUpById(controlId)
 		} else if (controlId === 'page_left') {
-			if (this.#pageButtonsNavigate) {
-				if (event.action === 'press') this.#context.changePage(false)
-			} else {
-				if (event.action === 'press') this.#context.keyDownById(controlId)
-				else if (event.action === 'release') this.#context.keyUpById(controlId)
-			}
+			if (event.action === 'press') this.#context.changePage(false)
 		} else if (controlId === 'page_right') {
-			if (this.#pageButtonsNavigate) {
-				if (event.action === 'press') this.#context.changePage(true)
-			} else {
-				if (event.action === 'press') this.#context.keyDownById(controlId)
-				else if (event.action === 'release') this.#context.keyUpById(controlId)
-			}
+			if (event.action === 'press') this.#context.changePage(true)
 		} else {
 			if (event.action === 'press') this.#context.keyDownById(controlId)
 			else if (event.action === 'release') this.#context.keyUpById(controlId)
@@ -147,17 +140,25 @@ export class D200Surface implements SurfaceInstance {
 	}
 
 	async updateConfig(config: Record<string, any>): Promise<void> {
+		const prevMode = this.#smallWindowMode
 		const mode = Number(config.smallWindowMode ?? SMALL_WINDOW_DISABLED)
 		this.#smallWindowMode = mode
-		this.#pageButtonsNavigate = config.pageButtonsNavigate !== false
 		this.#screensaverEnabled = config.screensaverEnabled === true
 		this.#screensaverMinutes = Number(config.screensaverMinutes || 5)
 		this.#device.setTwelveHour(!!config.twelveHour)
+		const bgChanged = await this.#updateBackgroundImage(String(config.backgroundImagePath ?? ''))
 		this.#applySmallWindowConfig()
 		if (this.#screensaverActive && !this.#screensaverEnabled) {
 			await this.#wakeFromScreensaver()
 		}
 		this.#resetScreensaverTimer()
+		// The small-window mode and background image are carried in the button
+		// ZIP, so re-push the cached buttons to make the change visible now
+		// rather than waiting for the next Companion redraw.
+		if (this.#initialPushDone && !this.#screensaverActive && (mode !== prevMode || bgChanged)) {
+			this.#restoreCachedButtonsToPending()
+			await this.#flush(false)
+		}
 	}
 
 	async ready(): Promise<void> {}
@@ -239,6 +240,7 @@ export class D200Surface implements SurfaceInstance {
 			await this.#device.setButtons(batch, {
 				partial: false,
 				smallWindowMode: this.#smallWindowMode,
+				backgroundPng: this.#activeBackgroundPng(),
 			})
 			this.#statusActive = true
 		} catch (e) {
@@ -273,6 +275,7 @@ export class D200Surface implements SurfaceInstance {
 			await this.#device.setButtons(batch, {
 				partial: isPartial,
 				smallWindowMode: this.#smallWindowMode,
+				backgroundPng: this.#activeBackgroundPng(),
 			})
 		} catch (e) {
 			this.#logger.warn(`setButtons failed: ${(e as Error).message}`)
@@ -346,6 +349,32 @@ export class D200Surface implements SurfaceInstance {
 		} finally {
 			this.#screensaverActive = wasActive
 		}
+	}
+
+	/** The background PNG to send, or undefined when not in "Background image" mode. */
+	#activeBackgroundPng(): Buffer | undefined {
+		return this.#smallWindowMode === SmallWindowMode.BACKGROUND ? this.#backgroundPng : undefined
+	}
+
+	/**
+	 * Load and cache the background image, scaled to fill the 458×196 small-window slot.
+	 * Returns true if the image changed (so the caller can re-push the buttons).
+	 */
+	async #updateBackgroundImage(path: string): Promise<boolean> {
+		if (path === this.#backgroundImagePath) return false
+		this.#backgroundImagePath = path
+		this.#backgroundPng = undefined
+		if (!path) return true
+		try {
+			const raw = await readFile(path)
+			const png = await imageRs.ImageTransformer.fromEncodedImage(raw)
+				.scale(SMALL_WINDOW_BG_WIDTH, SMALL_WINDOW_BG_HEIGHT, 'Fill')
+				.toEncodedImage('png')
+			this.#backgroundPng = Buffer.from(png.buffer)
+		} catch (e) {
+			this.#logger.warn(`Failed to load background image "${path}": ${(e as Error).message}`)
+		}
+		return true
 	}
 
 	#applySmallWindowConfig(): void {
