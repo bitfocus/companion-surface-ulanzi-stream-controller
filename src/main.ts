@@ -5,6 +5,7 @@ import {
 	type OpenSurfaceResult,
 	type SurfaceContext,
 	type SurfacePlugin,
+	type SurfaceRegisterProps,
 } from '@companion-surface/base'
 import { HIDAsync } from 'node-hid'
 import { CONFIG_FIELDS } from './config.js'
@@ -14,6 +15,10 @@ import { PINCODE_MAP, createSurfaceSchema } from './surface-schema.js'
 
 export interface D200PluginInfo {
 	device: HIDDevice
+}
+
+type PageNavigationRegisterProps = SurfaceRegisterProps & {
+	canChangePage: { label: string }
 }
 
 const logger = createModuleLogger('Plugin')
@@ -51,15 +56,20 @@ const D200Plugin: SurfacePlugin<D200PluginInfo> = {
 		})
 		logger.info(`Opening D200 at ${pluginInfo.device.path} (${surfaceId})`)
 
+		const registerProps: PageNavigationRegisterProps = {
+			brightness: true,
+			surfaceLayout: createSurfaceSchema(),
+			pincodeMap: PINCODE_MAP,
+			configFields: CONFIG_FIELDS,
+			location: null,
+			canChangePage: {
+				label: 'Enable the two bottom buttons for previous / next page',
+			},
+		}
+
 		return {
 			surface: new D200Surface(surfaceId, device, context),
-			registerProps: {
-				brightness: true,
-				surfaceLayout: createSurfaceSchema(),
-				pincodeMap: PINCODE_MAP,
-				configFields: CONFIG_FIELDS,
-				location: null,
-			},
+			registerProps,
 		}
 	},
 }
