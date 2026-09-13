@@ -11,13 +11,7 @@ import * as imageRs from '@julusian/image-rs'
 import { readFile } from 'node:fs/promises'
 import type { HIDAsync } from 'node-hid'
 import { D200Device } from './device.js'
-import {
-	ICON_HEIGHT,
-	ICON_WIDTH,
-	SMALL_WINDOW_BG_HEIGHT,
-	SMALL_WINDOW_BG_WIDTH,
-	SmallWindowMode,
-} from './protocol.js'
+import { ICON_HEIGHT, ICON_WIDTH, SMALL_WINDOW_BG_HEIGHT, SMALL_WINDOW_BG_WIDTH, SmallWindowMode } from './protocol.js'
 import { SMALL_WINDOW_DISABLED } from './config.js'
 import { type ButtonRenderInput } from './zip-builder.js'
 import {
@@ -82,7 +76,11 @@ export class D200Surface implements SurfaceInstance {
 		this.#context.keyUpById(virtualId)
 	}
 
-	async #handleInputEvent(event: { index: number; type: 'button' | 'encoder'; action: 'press' | 'release' | 'left' | 'right' }): Promise<void> {
+	async #handleInputEvent(event: {
+		index: number
+		type: 'button' | 'encoder'
+		action: 'press' | 'release' | 'left' | 'right'
+	}): Promise<void> {
 		const controlId = controlIdFromIndex(event.index)
 		if (!controlId) return
 
@@ -99,12 +97,10 @@ export class D200Surface implements SurfaceInstance {
 			if (event.action === 'left') {
 				this.#context.rotateLeftById(controlId)
 				this.#pulseVirtualControl(controlId, 'left')
-			}
-			else if (event.action === 'right') {
+			} else if (event.action === 'right') {
 				this.#context.rotateRightById(controlId)
 				this.#pulseVirtualControl(controlId, 'right')
-			}
-			else if (event.action === 'press') this.#context.keyDownById(controlId)
+			} else if (event.action === 'press') this.#context.keyDownById(controlId)
 			else if (event.action === 'release') this.#context.keyUpById(controlId)
 		} else if (controlId === 'page_left') {
 			if (event.action === 'press') this.#context.changePage(false)
@@ -126,6 +122,7 @@ export class D200Surface implements SurfaceInstance {
 		await this.#flush(false)
 		this.#initialPushDone = true
 		this.#applySmallWindowConfig()
+		this.#logger.info('D200 background keep-alive enabled')
 		this.#resetScreensaverTimer()
 	}
 
@@ -192,12 +189,7 @@ export class D200Surface implements SurfaceInstance {
 		const iconW = isSmallWindowSlot ? SMALL_WINDOW_BG_WIDTH : ICON_WIDTH
 		const iconH = isSmallWindowSlot ? SMALL_WINDOW_BG_HEIGHT : ICON_HEIGHT
 
-		const png = await imageRs.ImageTransformer.fromBuffer(
-			drawProps.image,
-			iconW,
-			iconH,
-			'rgb',
-		).toEncodedImage('png')
+		const png = await imageRs.ImageTransformer.fromBuffer(drawProps.image, iconW, iconH, 'rgb').toEncodedImage('png')
 		if (signal.aborted) return
 
 		this.#pending.set(key, {
@@ -295,9 +287,12 @@ export class D200Surface implements SurfaceInstance {
 			this.#screensaverTimer = undefined
 		}
 		if (!this.#screensaverEnabled || this.#screensaverMinutes <= 0) return
-		this.#screensaverTimer = setTimeout(() => {
-			void this.#activateScreensaver()
-		}, this.#screensaverMinutes * 60 * 1000)
+		this.#screensaverTimer = setTimeout(
+			() => {
+				void this.#activateScreensaver()
+			},
+			this.#screensaverMinutes * 60 * 1000,
+		)
 	}
 
 	async #activateScreensaver(): Promise<void> {
@@ -380,7 +375,7 @@ export class D200Surface implements SurfaceInstance {
 	#applySmallWindowConfig(): void {
 		if (this.#smallWindowMode === SMALL_WINDOW_DISABLED) {
 			this.#device.setSmallWindowMode(SmallWindowMode.BACKGROUND)
-			this.#device.pauseKeepAlive()
+			this.#device.resumeKeepAlive()
 		} else {
 			this.#device.setSmallWindowMode(this.#smallWindowMode)
 			this.#device.resumeKeepAlive()
@@ -392,8 +387,6 @@ export class D200Surface implements SurfaceInstance {
 	}
 
 	#resumeSmallWindowUpdates(): void {
-		if (this.#smallWindowMode !== SMALL_WINDOW_DISABLED) {
-			this.#device.resumeKeepAlive()
-		}
+		this.#device.resumeKeepAlive()
 	}
 }

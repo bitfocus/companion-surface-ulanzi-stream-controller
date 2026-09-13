@@ -18,15 +18,17 @@ Ulanzi Studio.
 - 13 configurable buttons, each with a Companion-rendered icon
 - Button press/release events
 - Brightness control from Companion
-- Page navigation from the two bottom-outer buttons (previous / next),
-  gated by Companion's own per-surface page-navigation setting
+- Page navigation from the two bottom-outer buttons (previous / next). After installing, open the surface configuration and enable
+  **Enable the two bottom buttons for previous / next page**
 - Small-window status display with seven modes — analog dial clock, four
   digital clock variants (time; time + weekday; time + date; date + time +
   weekday), system stats (CPU / RAM), or a custom background image — selectable
   per surface via the ⚙ **Config** panel. Digital modes honour a 12/24-hour
   checkbox. The background image is loaded from a local file path (PNG/JPEG) and
   scaled to fill the 458×196 window.
-- Optional idle screensaver that blanks the LCDs via the firmware lockscreen
+- Optional idle screensaver that blanks the LCDs via the firmware lockscreen.
+- Five-second background keep-alive prevents the D200X firmware from becoming
+  unresponsive while the wide Companion button is active.
 
 ## Quickstart
 
