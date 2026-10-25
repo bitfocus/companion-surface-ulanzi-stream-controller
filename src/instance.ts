@@ -106,9 +106,9 @@ export class D200Surface implements SurfaceInstance {
 			}
 			else if (event.action === 'press') this.#context.keyDownById(controlId)
 			else if (event.action === 'release') this.#context.keyUpById(controlId)
-		} else if (controlId === 'page_left') {
+		} else if (controlId === 'page-left') {
 			if (event.action === 'press') this.#context.changePage(false)
-		} else if (controlId === 'page_right') {
+		} else if (controlId === 'page-right') {
 			if (event.action === 'press') this.#context.changePage(true)
 		} else {
 			if (event.action === 'press') this.#context.keyDownById(controlId)
