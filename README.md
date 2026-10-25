@@ -27,6 +27,8 @@ Ulanzi Studio.
   checkbox. The background image is loaded from a local file path (PNG/JPEG) and
   scaled to fill the 458×196 window.
 - Optional idle screensaver that blanks the LCDs via the firmware lockscreen
+- Continuous background keep-alive to prevent D200/D200X firmware from falling asleep or reverting to the launch logo when the status window is disabled
+- Compatible with Companion 5.x schema validation (standard hyphenated control IDs)
 
 ## Quickstart
 

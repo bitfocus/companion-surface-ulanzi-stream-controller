@@ -117,6 +117,11 @@ export class D200Surface implements SurfaceInstance {
 	}
 
 	async init(): Promise<void> {
+		try {
+			await this.#device.unlockScreen()
+		} catch (e) {
+			this.#logger.warn(`Initial unlock screen failed: ${(e as Error).message}`)
+		}
 		for (const pos of LCD_BUTTON_POSITIONS) {
 			const key = `${pos.col}_${pos.row}`
 			const blank = { col: pos.col, row: pos.row }
@@ -322,6 +327,7 @@ export class D200Surface implements SurfaceInstance {
 			this.#screensaverWaking = false
 			return
 		}
+		await new Promise((r) => setTimeout(r, 50))
 		this.#screensaverActive = false
 		if (this.#flushTimer) {
 			clearTimeout(this.#flushTimer)
@@ -380,7 +386,7 @@ export class D200Surface implements SurfaceInstance {
 	#applySmallWindowConfig(): void {
 		if (this.#smallWindowMode === SMALL_WINDOW_DISABLED) {
 			this.#device.setSmallWindowMode(SmallWindowMode.BACKGROUND)
-			this.#device.pauseKeepAlive()
+			this.#device.resumeKeepAlive()
 		} else {
 			this.#device.setSmallWindowMode(this.#smallWindowMode)
 			this.#device.resumeKeepAlive()
@@ -392,8 +398,6 @@ export class D200Surface implements SurfaceInstance {
 	}
 
 	#resumeSmallWindowUpdates(): void {
-		if (this.#smallWindowMode !== SMALL_WINDOW_DISABLED) {
-			this.#device.resumeKeepAlive()
-		}
+		this.#device.resumeKeepAlive()
 	}
 }
